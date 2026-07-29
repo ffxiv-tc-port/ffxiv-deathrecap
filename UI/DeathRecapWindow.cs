@@ -32,7 +32,7 @@ public class DeathRecapWindow : Window {
 
     private bool hasShownTip;
 
-    public DeathRecapWindow(DeathRecapPlugin plugin) : base("Death Recap") {
+    public DeathRecapWindow(DeathRecapPlugin plugin) : base("死亡回顧") {
         this.plugin = plugin;
 
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -61,14 +61,14 @@ public class DeathRecapWindow : Window {
             if (ImGuiComponents.IconButton("FilterButton", FontAwesomeIcon.Filter))
                 ImGui.OpenPopup("death_recap_filter");
             if (ImGui.IsItemHovered()) {
-                ImGui.SetTooltip("Filter events");
+                ImGui.SetTooltip("篩選事件");
             }
 
             if (plugin.Configuration.ShowCombatHistogram)
                 ImGui.EndDisabled();
 
             if (ImGui.BeginPopup("death_recap_filter")) {
-                ImGui.TextUnformatted("Row filters");
+                ImGui.TextUnformatted("事件篩選");
 
                 void FlagCheckbox(string label, EventFilter flag) {
                     var b = plugin.Configuration.EventFilter.HasFlag(flag);
@@ -81,10 +81,10 @@ public class DeathRecapWindow : Window {
                     plugin.Configuration.Save();
                 }
 
-                FlagCheckbox("Show damage", EventFilter.Damage);
-                FlagCheckbox("Show healing", EventFilter.Healing);
-                FlagCheckbox("Show debuffs", EventFilter.Debuffs);
-                FlagCheckbox("Show buffs", EventFilter.Buffs);
+                FlagCheckbox("顯示傷害", EventFilter.Damage);
+                FlagCheckbox("顯示治療", EventFilter.Healing);
+                FlagCheckbox("顯示減益效果", EventFilter.Debuffs);
+                FlagCheckbox("顯示增益效果", EventFilter.Buffs);
                 ImGui.EndPopup();
             }
 
@@ -95,7 +95,7 @@ public class DeathRecapWindow : Window {
             }
 
             if (ImGui.IsItemHovered()) {
-                ImGui.SetTooltip(plugin.Configuration.ShowCombatHistogram ? "Switch to detailed view" : "Switch to histogram (experimental)");
+                ImGui.SetTooltip(plugin.Configuration.ShowCombatHistogram ? "切換至詳細檢視" : "切換至直方圖（實驗性）");
             }
 
             ImGui.SameLine(0, 15);
@@ -103,18 +103,18 @@ public class DeathRecapWindow : Window {
                 ImGui.OpenPopup("death_recap_clearall");
 
             if (ImGui.IsItemHovered()) {
-                ImGui.SetTooltip("Clear all events");
+                ImGui.SetTooltip("清除所有事件");
             }
 
             if (ImGui.BeginPopup("death_recap_clearall")) {
-                ImGui.TextUnformatted("Are you sure?");
-                if (ImGui.Button("Yes")) {
+                ImGui.TextUnformatted("確定要清除嗎？");
+                if (ImGui.Button("是")) {
                     plugin.DeathsPerPlayer.Clear();
                     ImGui.CloseCurrentPopup();
                 }
 
                 ImGui.SameLine();
-                if (ImGui.Button("No")) {
+                if (ImGui.Button("否")) {
                     ImGui.CloseCurrentPopup();
                 }
 
@@ -130,7 +130,7 @@ public class DeathRecapWindow : Window {
 
             ImGui.PopFont();
             if (ImGui.IsItemHovered()) {
-                ImGui.SetTooltip("Copy combat events as JSON");
+                ImGui.SetTooltip("將戰鬥事件複製為 JSON");
             }
 #endif
 
@@ -142,14 +142,14 @@ public class DeathRecapWindow : Window {
 
             ImGui.PopFont();
             if (ImGui.IsItemHovered()) {
-                ImGui.SetTooltip("Configuration");
+                ImGui.SetTooltip("設定");
             }
 
             ImGui.Separator();
 
             ImGui.Columns(2);
             ImGui.SetColumnWidth(0, 160 * ImGuiHelpers.GlobalScale);
-            ImGui.TextUnformatted("Deaths");
+            ImGui.TextUnformatted("死亡記錄");
             ImGui.Spacing();
             for (var index = deaths.Count - 1; index >= 0; index--) {
                 ImGui.PushID(index);
@@ -171,7 +171,7 @@ public class DeathRecapWindow : Window {
 
     public override void OnClose() {
         if (plugin.Configuration.ShowTip && !hasShownTip) {
-            Service.ChatGui.Print("[DeathRecap] Tip: You can reopen this window using /dr or /deathrecap");
+            Service.ChatGui.Print("[DeathRecap] 提示：可使用 /dr 或 /deathrecap 重新開啟此視窗。");
             hasShownTip = true;
         }
     }
@@ -185,7 +185,7 @@ public class DeathRecapWindow : Window {
         }
 
         ImGui.AlignTextToFramePadding();
-        ImGui.TextUnformatted("Player");
+        ImGui.TextUnformatted("玩家");
         ImGui.SameLine();
         ImGui.SetNextItemWidth(200 * ImGuiHelpers.GlobalScale);
         if (ImGui.BeginCombo("", selectedPlayerName)) {
@@ -218,12 +218,12 @@ public class DeathRecapWindow : Window {
         if (ImGui.BeginTable("deathrecap", 6,
                 ImGuiTableFlags.Borders | ImGuiTableFlags.NoBordersInBody | ImGuiTableFlags.ScrollY | ImGuiTableFlags.Resizable | ImGuiTableFlags.Reorderable |
                 ImGuiTableFlags.Hideable)) {
-            ImGui.TableSetupColumn("Time", ImGuiTableColumnFlags.WidthFixed);
-            ImGui.TableSetupColumn("Amount", ImGuiTableColumnFlags.WidthFixed);
-            ImGui.TableSetupColumn("Ability");
-            ImGui.TableSetupColumn("Source");
-            ImGui.TableSetupColumn("HP Before");
-            ImGui.TableSetupColumn("Status Effects");
+            ImGui.TableSetupColumn("時間", ImGuiTableColumnFlags.WidthFixed);
+            ImGui.TableSetupColumn("數值", ImGuiTableColumnFlags.WidthFixed);
+            ImGui.TableSetupColumn("技能");
+            ImGui.TableSetupColumn("來源");
+            ImGui.TableSetupColumn("作用前 HP");
+            ImGui.TableSetupColumn("狀態效果");
             ImGui.TableHeadersRow();
 
             if (death != null)
@@ -249,7 +249,7 @@ public class DeathRecapWindow : Window {
 
                             ImGui.TableNextColumn(); // Ability
                             ImGui.AlignTextToFramePadding();
-                            ImGui.TextUnformatted("Regen");
+                ImGui.TextUnformatted("持續恢復");
 
                             ImGui.TableNextColumn(); // Source
 
@@ -268,7 +268,7 @@ public class DeathRecapWindow : Window {
 
                             ImGui.TableNextColumn(); // Ability
                             ImGui.AlignTextToFramePadding();
-                            ImGui.TextUnformatted("DoT damage");
+                ImGui.TextUnformatted("持續傷害");
 
                             ImGui.TableNextColumn(); // Source
 
@@ -290,13 +290,13 @@ public class DeathRecapWindow : Window {
                                 ImGui.BeginTooltip();
                                 ImGui.TextUnformatted($"{dt.DamageType} Damage");
                                 if (dt.Crit)
-                                    ImGui.TextUnformatted("Critical Hit");
+                    ImGui.TextUnformatted("暴擊");
                                 if (dt.DirectHit)
-                                    ImGui.TextUnformatted("Direct Hit (+25%)");
+                    ImGui.TextUnformatted("直擊（+25%）");
                                 if (dt.Parried)
-                                    ImGui.TextUnformatted("Parried (-20%)");
+                    ImGui.TextUnformatted("招架（-20%）");
                                 if (dt.Blocked)
-                                    ImGui.TextUnformatted("Blocked (-15%)");
+                    ImGui.TextUnformatted("格擋（-15%）");
                                 ImGui.EndTooltip();
                             }
 
@@ -478,11 +478,11 @@ public class DeathRecapWindow : Window {
                 switch (eCur) {
                     case CombatEvent.Healed h: {
                         ImGui.AlignTextToFramePadding();
-                        ImGui.TextUnformatted("Healed for");
+                ImGui.TextUnformatted("恢復");
                         ImGui.SameLine(0, 4);
                         ImGuiHelper.TextColored(numCol, $"{h.Amount:N0}");
                         ImGui.SameLine(0, 4);
-                        ImGui.TextUnformatted("from");
+                ImGui.TextUnformatted("，技能");
                         ImGui.SameLine(0, 6);
                         if (GetIconImage(h.Icon) is { } img) {
                             InlineIcon(img);
@@ -490,16 +490,16 @@ public class DeathRecapWindow : Window {
 
                         ImGuiHelper.TextColored(ColorAction, $"{h.Action}");
                         ImGui.SameLine(0, 4);
-                        ImGui.TextUnformatted($"by {h.Source ?? ""}.");
+                ImGui.TextUnformatted($"，來源：{h.Source ?? ""}。");
                         break;
                     }
                     case CombatEvent.DamageTaken dt: {
                         ImGui.AlignTextToFramePadding();
-                        ImGui.TextUnformatted("Took");
+                ImGui.TextUnformatted("受到");
                         ImGui.SameLine(0, 4);
                         ImGuiHelper.TextColored(numCol, $"{dt.Amount:N0}");
                         ImGui.SameLine(0, 4);
-                        ImGui.TextUnformatted("from");
+                ImGui.TextUnformatted("點傷害，技能");
                         ImGui.SameLine(0, 6);
                         if (GetIconImage(dt.Icon) is { } img) {
                             InlineIcon(img);
@@ -507,23 +507,23 @@ public class DeathRecapWindow : Window {
 
                         ImGuiHelper.TextColored(ColorAction, $"{dt.Action}");
                         ImGui.SameLine(0, 4);
-                        ImGui.TextUnformatted($"by {dt.Source ?? ""}.");
+                ImGui.TextUnformatted($"，來源：{dt.Source ?? ""}。");
 
                         break;
                     }
                     case CombatEvent.DoT dt:
-                        ImGui.TextUnformatted("Took");
+                ImGui.TextUnformatted("受到");
                         ImGui.SameLine(0, 4);
                         ImGuiHelper.TextColored(numCol, $"{dt.Amount:N0}");
                         ImGui.SameLine(0, 4);
-                        ImGui.TextUnformatted("from damage over time effect.");
+                ImGui.TextUnformatted("點持續傷害。");
                         break;
                     case CombatEvent.HoT hot:
-                        ImGui.TextUnformatted("Recovered");
+                ImGui.TextUnformatted("透過持續恢復效果恢復");
                         ImGui.SameLine(0, 4);
                         ImGuiHelper.TextColored(numCol, $"{hot.Amount:N0}");
                         ImGui.SameLine(0, 4);
-                        ImGui.TextUnformatted("HP from healing over time effect.");
+                ImGui.TextUnformatted("點 HP。");
                         break;
                 }
 
@@ -531,7 +531,7 @@ public class DeathRecapWindow : Window {
                     $"HP: {eCur.Snapshot.CurrentHp:N0} ({(float)eCur.Snapshot.CurrentHp / eCur.Snapshot.MaxHp:P1}) → {eCur.Snapshot.CurrentHp + change:N0} ({(float)(eCur.Snapshot.CurrentHp + change) / eCur.Snapshot.MaxHp:P1})");
 
                 if (eCur.Snapshot.StatusEffects is { Count: > 0 } statusEffects) {
-                    ImGui.TextUnformatted("Status Effects");
+            ImGui.TextUnformatted("狀態效果");
                     var printSeparator = false;
                     var statusSheet = Service.DataManager.GetExcelSheet<Status>();
                     foreach (var category in statusEffects.Select(s => (Status: statusSheet.GetRow(s.Id), s.StackCount))
@@ -729,7 +729,7 @@ public class DeathRecapWindow : Window {
             bbMin.Y + (bbMax.Y - bbMin.Y - textSiye.Y) * 0.5f), 0xFFFFFFFF, text);
 
         if (overkill > 0 && ImGui.IsItemHovered()) {
-            ImGui.SetTooltip($"Overkill by {overkill:N0}");
+            ImGui.SetTooltip($"過量傷害：{overkill:N0}");
         }
     }
 

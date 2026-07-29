@@ -1,16 +1,16 @@
 name: Death Recap
 author: Kouzukii
-punchline: Quickly figure out what killed you or your party members!
+punchline: 快速找出你或隊員的死亡原因！
 description: |-
-  Quickly figure out what killed you or your party members!
+  快速找出你或隊員的死亡原因！
 
-  Shows:
-  - Healing
-  - Damage taken
-  - Debuffs
-  - Buffs
-  - Barriers
-  - Addle, Feint, Reprisal on damage source
+  顯示：
+  - 治療
+  - 承受傷害
+  - 減益效果
+  - 增益效果
+  - 防護罩
+  - 傷害來源身上的昏亂、牽制與雪仇
 repo_url: https://github.com/cycleapple/ffxiv-deathrecap
 tags:
   - death
