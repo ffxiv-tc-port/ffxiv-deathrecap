@@ -53,3 +53,4 @@ jobs:
 # 🔴 資產名一律用 InternalName(DeathRecap),不是 repo 名(ffxiv-deathrecap)——
 # DalamudPluginsTC 的 mirror_releases.py 用「資產檔名去副檔名 == InternalName(忽略大小寫)」挑 own_assets。
 # ci: 觸發 Actions 註冊 dispatch-only workflow(新 repo 首次)
+# ci: 觸發 Actions 註冊 release workflow(新 repo dispatch-only 首次)
