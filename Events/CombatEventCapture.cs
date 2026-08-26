@@ -81,7 +81,9 @@ public class CombatEventCapture : IDisposable {
                         amount += (uint)actionEffect.Param3 << 16;
 
                     action ??= Service.DataManager.GetExcelSheet<Action>().GetRowOrDefault(actionId);
-                    source ??= casterPtr->NameString;
+                    // casterPtr can legitimately be null for source-less effects; a null deref here would be an
+                    // uncatchable AccessViolationException (the try/catch below cannot catch it).
+                    source ??= casterPtr != null ? casterPtr->NameString : "";
 
                     switch ((ActionEffectType)actionEffect.Type) {
                         case ActionEffectType.Miss:
@@ -89,7 +91,7 @@ public class CombatEventCapture : IDisposable {
                         case ActionEffectType.BlockedDamage:
                         case ActionEffectType.ParriedDamage:
                             if (additionalStatus == null) {
-                                var statusManager = casterPtr->GetStatusManager();
+                                var statusManager = casterPtr != null ? casterPtr->GetStatusManager() : null;
                                 additionalStatus = [];
                                 if (statusManager != null) {
                                     foreach (ref var status in statusManager->Status) {
@@ -190,6 +192,10 @@ public class CombatEventCapture : IDisposable {
         processPacketEffectResultHook.Original(targetId, actionIntegrityData, isReplay);
 
         try {
+            // actionIntegrityData is a raw game-supplied pointer; a zero here would AVE-crash on deref below
+            // (uncatchable in .NET, so the surrounding try/catch cannot help).
+            if (actionIntegrityData == IntPtr.Zero)
+                return;
             var message = (AddStatusEffect*)actionIntegrityData;
             if (!plugin.ConditionEvaluator.ShouldCapture(targetId))
                 return;
