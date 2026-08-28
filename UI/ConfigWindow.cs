@@ -16,7 +16,7 @@ public class ConfigWindow : Window {
     public ConfigWindow(DeathRecapPlugin plugin) : base("死亡回顧設定", ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoResize) {
         this.plugin = plugin;
 
-        Size = new Vector2(580, 340);
+        Size = new Vector2(580, 400);
     }
 
     public override void Draw() {
@@ -84,6 +84,31 @@ public class ConfigWindow : Window {
         }
 
         ChatTipTooltip();
+
+        var bAutoClose = conf.AutoCloseAutoShownWindow;
+        if (ImGui.Checkbox("自動顯示的視窗在指定秒數後自動關閉###autoCloseAutoShown", ref bAutoClose)) {
+            conf.AutoCloseAutoShownWindow = bAutoClose;
+            conf.Save();
+        }
+
+        AutoCloseTooltip();
+
+        if (!conf.AutoCloseAutoShownWindow)
+            ImGui.BeginDisabled();
+        var autoCloseSeconds = conf.AutoCloseSeconds;
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextUnformatted("自動關閉秒數");
+        ImGui.SameLine(ImGuiHelpers.GlobalScale * 140);
+        ImGui.SetNextItemWidth(ImGuiHelpers.GlobalScale * 150);
+        if (ImGui.InputInt("##6", ref autoCloseSeconds, 1)) {
+            conf.AutoCloseSeconds = Math.Max(0, autoCloseSeconds);
+            conf.Save();
+        }
+
+        AutoCloseSecondsTooltip();
+        if (!conf.AutoCloseAutoShownWindow)
+            ImGui.EndDisabled();
+
         var keepEventsFor = conf.KeepCombatEventsForSeconds;
         ImGui.AlignTextToFramePadding();
         ImGui.TextUnformatted("保留事件（秒）");
@@ -116,6 +141,20 @@ public class ConfigWindow : Window {
     private static void ChatTipTooltip() {
         if (ImGui.IsItemHovered()) {
             ImGui.SetTooltip("第一次關閉死亡回顧時，在聊天欄顯示重新開啟視窗的指令。");
+        }
+    }
+
+    private static void AutoCloseTooltip() {
+        if (ImGui.IsItemHovered()) {
+            ImGui.SetTooltip("只影響死亡時「開啟死亡回顧」自動彈出的視窗。\n" +
+                             "自己用 /dr、點聊天連結或點彈出視窗開啟的不會被自動關閉。\n" +
+                             "倒數期間在視窗上點一下滑鼠（或滾動）就會取消自動關閉。");
+        }
+    }
+
+    private static void AutoCloseSecondsTooltip() {
+        if (ImGui.IsItemHovered()) {
+            ImGui.SetTooltip("自動顯示的視窗要在幾秒後自動關閉。\n設為 0 等同停用自動關閉。");
         }
     }
 

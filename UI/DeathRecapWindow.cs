@@ -27,10 +27,16 @@ public class DeathRecapWindow : Window {
     private const uint ColorAction = 0xFFf0a8b8;
     private const uint ColorGrey = 0xFF808080;
     private const uint ColorDarkGrey = 0xFF303030;
+    private const uint ColorAutoClose = 0xFF4AC0FF;
 
     private readonly DeathRecapPlugin plugin;
 
     private bool hasShownTip;
+
+    /// <summary>
+    /// 自動關閉的截止時刻（<see cref="Environment.TickCount64"/>）。0 代表沒有在倒數。
+    /// </summary>
+    private long autoCloseAt;
 
     public DeathRecapWindow(DeathRecapPlugin plugin) : base("死亡回顧") {
         this.plugin = plugin;
@@ -43,8 +49,71 @@ public class DeathRecapWindow : Window {
 
     public int SelectedDeath { get; internal set; }
 
+    /// <summary>
+    /// 開始（或重設）自動關閉倒數。只有「死亡時自動開啟死亡回顧」這條路徑該呼叫。
+    /// 重複呼叫是重設成完整秒數，不會累加。
+    /// </summary>
+    public void BeginAutoCloseCountdown() {
+        var seconds = plugin.Configuration.AutoCloseSeconds;
+        autoCloseAt = plugin.Configuration.AutoCloseAutoShownWindow && seconds > 0 ? Environment.TickCount64 + seconds * 1000L : 0;
+    }
+
+    /// <summary>
+    /// 取消自動關閉倒數。使用者主動開啟或操作視窗時呼叫。
+    /// </summary>
+    public void CancelAutoCloseCountdown() => autoCloseAt = 0;
+
+    /// <summary>
+    /// 判斷使用者這一幀是不是真的在「操作」這個視窗（含子視窗）。單純把滑鼠掠過去不算。
+    /// </summary>
+    private static bool IsUserInteracting() {
+        const ImGuiHoveredFlags flags = ImGuiHoveredFlags.RootAndChildWindows | ImGuiHoveredFlags.AllowWhenBlockedByActiveItem |
+                                        ImGuiHoveredFlags.AllowWhenBlockedByPopup;
+        if (!ImGui.IsWindowHovered(flags))
+            return false;
+
+        if (ImGui.IsMouseClicked(ImGuiMouseButton.Left) || ImGui.IsMouseClicked(ImGuiMouseButton.Right) ||
+            ImGui.IsMouseClicked(ImGuiMouseButton.Middle))
+            return true;
+
+        var io = ImGui.GetIO();
+        return io.MouseWheel != 0 || io.MouseWheelH != 0;
+    }
+
+    /// <summary>
+    /// 每幀在 Draw 內推進倒數：被操作就取消，時間到就關窗。不另開 timer。
+    /// </summary>
+    private void UpdateAutoClose() {
+        if (autoCloseAt == 0)
+            return;
+
+        if (IsUserInteracting()) {
+            autoCloseAt = 0;
+            return;
+        }
+
+        if (Environment.TickCount64 >= autoCloseAt) {
+            autoCloseAt = 0;
+            IsOpen = false;
+        }
+    }
+
+    /// <summary>
+    /// 倒數中要顯示在標題列右側的字樣，沒在倒數時回傳 null。
+    /// </summary>
+    private string? GetAutoCloseLabel() {
+        if (autoCloseAt == 0)
+            return null;
+
+        var remainingMs = autoCloseAt - Environment.TickCount64;
+        var remaining = (int)Math.Ceiling(Math.Max(remainingMs, 0) / 1000d);
+        return $"{remaining} 秒後自動關閉";
+    }
+
     public override void Draw() {
         try {
+            UpdateAutoClose();
+
             if (!plugin.DeathsPerPlayer.TryGetValue(SelectedPlayer, out var deaths))
                 deaths = new List<Death>();
 
@@ -136,7 +205,23 @@ public class DeathRecapWindow : Window {
 
             ImGui.PushFont(UiBuilder.IconFont);
             var config = FontAwesomeIcon.Cog.ToIconString();
-            ImGui.SameLine(ImGui.GetWindowContentRegionMax().X - ImGui.GetWindowContentRegionMin().X - ImGuiHelpers.GetButtonSize(config).X);
+            var configX = ImGui.GetWindowContentRegionMax().X - ImGui.GetWindowContentRegionMin().X - ImGuiHelpers.GetButtonSize(config).X;
+            ImGui.PopFont();
+
+            if (GetAutoCloseLabel() is { } autoCloseLabel) {
+                var labelWidth = ImGui.CalcTextSize(autoCloseLabel).X;
+                ImGui.SameLine(Math.Max(0f, configX - labelWidth - 15 * ImGuiHelpers.GlobalScale));
+                ImGui.AlignTextToFramePadding();
+                ImGui.PushStyleColor(ImGuiCol.Text, ColorAutoClose);
+                ImGui.TextUnformatted(autoCloseLabel);
+                ImGui.PopStyleColor();
+                if (ImGui.IsItemHovered()) {
+                    ImGui.SetTooltip("這個視窗是死亡時自動顯示的，倒數結束後會自動關閉。\n在視窗上點一下滑鼠即可取消自動關閉。");
+                }
+            }
+
+            ImGui.PushFont(UiBuilder.IconFont);
+            ImGui.SameLine(configX);
             if (ImGui.Button(config))
                 plugin.ConfigWindow.IsOpen = true;
 
@@ -170,6 +255,8 @@ public class DeathRecapWindow : Window {
     }
 
     public override void OnClose() {
+        autoCloseAt = 0;
+
         if (plugin.Configuration.ShowTip && !hasShownTip) {
             Service.ChatGui.Print("[DeathRecap] 提示：可使用 /dr 或 /deathrecap 重新開啟此視窗。");
             hasShownTip = true;

@@ -41,6 +41,9 @@ public class NotificationHandler : Window {
                 selectedDeath = deaths.Count - idx - 1;
             }
 
+            // 使用者自己點了聊天連結，這不是自動顯示：把自動關閉倒數取消掉。
+            plugin.Window.CancelAutoCloseCountdown();
+
             if (plugin.Window.SelectedPlayer == deaths[0].PlayerId && plugin.Window.SelectedDeath == selectedDeath) {
                 plugin.Window.Toggle();
             } else {
@@ -63,6 +66,8 @@ public class NotificationHandler : Window {
                 label = AppendCenteredPlayerName(label, playerName);
 
             if (ImGui.Button(label, new Vector2(-1, -1))) {
+                // 使用者自己按了彈出視窗的按鈕，這不是自動顯示：把自動關閉倒數取消掉。
+                plugin.Window.CancelAutoCloseCountdown();
                 plugin.Window.IsOpen = true;
                 if (popupDeath?.PlayerId is { } id)
                     plugin.Window.SelectedPlayer = id;
@@ -118,9 +123,11 @@ public class NotificationHandler : Window {
                 Service.ChatGui.Print(new XivChatEntry { Message = chatMsg, Type = plugin.Configuration.ChatType, Name = death.PlayerName });
                 break;
             case NotificationStyle.OpenDeathRecap:
+                // 這是唯一「死亡事件自動彈出死亡回顧」的路徑，套用自動關閉倒數。
                 plugin.Window.IsOpen = true;
                 plugin.Window.SelectedPlayer = death.PlayerId;
                 plugin.Window.SelectedDeath = 0;
+                plugin.Window.BeginAutoCloseCountdown();
                 break;
         }
     }
