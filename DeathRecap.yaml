@@ -7,8 +7,8 @@ description: |-
   顯示：
   - 治療
   - 承受傷害
-  - 減益效果
-  - 增益效果
+  - 弱化狀態
+  - 強化狀態
   - 防護罩
   - 傷害來源身上的昏亂、牽制與雪仇
 repo_url: https://github.com/ffxiv-tc-port/ffxiv-deathrecap
