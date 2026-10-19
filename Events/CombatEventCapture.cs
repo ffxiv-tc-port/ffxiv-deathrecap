@@ -11,6 +11,7 @@ using FFXIVClientStructs.FFXIV.Client.Game.Object;
 using FFXIVClientStructs.FFXIV.Common.Math;
 using Action = Lumina.Excel.Sheets.Action;
 using Status = Lumina.Excel.Sheets.Status;
+using TerritoryType = Lumina.Excel.Sheets.TerritoryType;
 
 namespace DeathRecap.Events;
 
@@ -27,31 +28,63 @@ public class CombatEventCapture : IDisposable {
 
     private delegate void ProcessPacketEffectResultDelegate(uint targetId, IntPtr actionIntegrityData, byte isReplay);
 
-    private readonly Hook<ProcessPacketActionEffectDelegate> processPacketActionEffectHook;
+    // 三個掛鉤都可能是 null：遊戲改版後特徵碼對不上的那一個不建立（建構子各印一行 Warning），
+    // 其餘照常，不讓整個插件載入失敗。detour 只會在自己的掛鉤存在時被呼叫。
+    private readonly Hook<ProcessPacketActionEffectDelegate>? processPacketActionEffectHook;
 
-    [Signature("E8 ?? ?? ?? ?? 0F B7 0B 83 E9 64", DetourName = nameof(ProcessPacketActorControlDetour))]
-    private readonly Hook<ProcessPacketActorControlDelegate> processPacketActorControlHook = null!;
+    [Signature("E8 ?? ?? ?? ?? 0F B7 0B 83 E9 64", DetourName = nameof(ProcessPacketActorControlDetour), Fallibility = Fallibility.Fallible)]
+    private readonly Hook<ProcessPacketActorControlDelegate>? processPacketActorControlHook = null;
 
-    [Signature("48 8B C4 44 88 40 18 89 48 08", DetourName = nameof(ProcessPacketEffectResultDetour))]
-    private readonly Hook<ProcessPacketEffectResultDelegate> processPacketEffectResultHook = null!;
+    [Signature("48 8B C4 44 88 40 18 89 48 08", DetourName = nameof(ProcessPacketEffectResultDetour), Fallibility = Fallibility.Fallible)]
+    private readonly Hook<ProcessPacketEffectResultDelegate>? processPacketEffectResultHook = null;
+
+    /// <summary>有掛鉤沒建立時給死亡回顧視窗顯示的一行說明；三個都在時是 null。</summary>
+    public string? MissingNotice { get; }
 
     public unsafe CombatEventCapture(DeathRecapPlugin plugin) {
         this.plugin = plugin;
 
-        Service.GameInteropProvider.InitializeFromAttributes(this);
+        try {
+            Service.GameInteropProvider.InitializeFromAttributes(this);
+        } catch (Exception e) {
+            Service.PluginLog.Error(e, "[DeathRecap] 特徵碼初始化中途失敗，沒建立的掛鉤見下面的警告");
+        }
 
-        processPacketActionEffectHook =
-            Service.GameInteropProvider.HookFromSignature<ProcessPacketActionEffectDelegate>(ActionEffectHandler.Addresses.Receive.String,
-                ProcessPacketActionEffectDetour);
-        processPacketActionEffectHook.Enable();
-        processPacketActorControlHook.Enable();
-        processPacketEffectResultHook.Enable();
+        try {
+            processPacketActionEffectHook =
+                Service.GameInteropProvider.HookFromSignature<ProcessPacketActionEffectDelegate>(ActionEffectHandler.Addresses.Receive.String,
+                    ProcessPacketActionEffectDetour);
+        } catch (Exception e) {
+            Service.PluginLog.Warning(e, "[DeathRecap] ActionEffectHandler.Receive 的掛鉤沒建立（遊戲改版後特徵碼對不上時會這樣，原因見例外）：死亡回顧不會有傷害與治療事件");
+        }
+
+        if (processPacketActorControlHook == null)
+            Service.PluginLog.Warning("[DeathRecap] 特徵碼對不上 ProcessPacketActorControl（遊戲改版後需要更新）：偵測不到死亡，死亡回顧與死亡紀錄都不會有新的一筆（DoT／HoT 事件也沒有）");
+        if (processPacketEffectResultHook == null)
+            Service.PluginLog.Warning("[DeathRecap] 特徵碼對不上 ProcessPacketEffectResult（遊戲改版後需要更新）：死亡回顧不會有增益／減益效果事件");
+
+        MissingNotice = BuildMissingNotice(processPacketActionEffectHook != null, processPacketActorControlHook != null,
+            processPacketEffectResultHook != null);
+
+        processPacketActionEffectHook?.Enable();
+        processPacketActorControlHook?.Enable();
+        processPacketEffectResultHook?.Enable();
+    }
+
+    private static string? BuildMissingNotice(bool hasActionEffect, bool hasActorControl, bool hasEffectResult) {
+        // 死亡本身是 ActorControl 掛鉤偵測的：少了它就不會有任何新紀錄，其餘兩項不必再列。
+        if (!hasActorControl)
+            return "遊戲改版後特徵碼對不上，偵測不到死亡：暫時不會有新的死亡記錄（等插件更新）。";
+        if (hasActionEffect && hasEffectResult)
+            return null;
+        var missing = !hasActionEffect && !hasEffectResult ? "傷害與治療、增益／減益效果" : !hasActionEffect ? "傷害與治療" : "增益／減益效果";
+        return $"遊戲改版後特徵碼對不上，死亡記錄暫時缺少：{missing}（等插件更新）。";
     }
 
     private unsafe void ProcessPacketActionEffectDetour(
         uint casterEntityId, Character* casterPtr, Vector3* targetPos, ActionEffectHandler.Header* effectHeader, ActionEffectHandler.TargetEffects* effectArray,
         GameObjectId* targetEntityIds) {
-        processPacketActionEffectHook.Original(casterEntityId, casterPtr, targetPos, effectHeader, effectArray, targetEntityIds);
+        processPacketActionEffectHook!.Original(casterEntityId, casterPtr, targetPos, effectHeader, effectArray, targetEntityIds);
 
         try {
             if (effectHeader->NumTargets == 0)
@@ -64,6 +97,7 @@ public class CombatEventCapture : IDisposable {
             };
             Action? action = null;
             string? source = null;
+            var sourceIsPlayer = false;
             List<uint>? additionalStatus = null;
 
             for (var i = 0; i < effectHeader->NumTargets; i++) {
@@ -81,7 +115,12 @@ public class CombatEventCapture : IDisposable {
                         amount += (uint)actionEffect.Param3 << 16;
 
                     action ??= Service.DataManager.GetExcelSheet<Action>().GetRowOrDefault(actionId);
-                    source ??= casterPtr->NameString;
+                    // casterPtr can legitimately be null for source-less effects; a null deref here would be an
+                    // uncatchable AccessViolationException (the try/catch below cannot catch it).
+                    if (source == null) {
+                        source = casterPtr != null ? casterPtr->NameString : "";
+                        sourceIsPlayer = casterPtr != null && casterPtr->ObjectKind == ObjectKind.Pc;
+                    }
 
                     switch ((ActionEffectType)actionEffect.Type) {
                         case ActionEffectType.Miss:
@@ -89,11 +128,11 @@ public class CombatEventCapture : IDisposable {
                         case ActionEffectType.BlockedDamage:
                         case ActionEffectType.ParriedDamage:
                             if (additionalStatus == null) {
-                                var statusManager = casterPtr->GetStatusManager();
+                                var statusManager = casterPtr != null ? casterPtr->GetStatusManager() : null;
                                 additionalStatus = [];
                                 if (statusManager != null) {
                                     foreach (ref var status in statusManager->Status) {
-                                        if (status.StatusId is 1203 or 1195 or 1193 or 860 or 1715 or 2115 or 3642)
+                                        if (SelfDeathLog.IsTargetMitigation(status.StatusId))
                                             additionalStatus.Add(status.StatusId);
                                     }
                                 }
@@ -101,15 +140,9 @@ public class CombatEventCapture : IDisposable {
 
                             combatEvents.AddEntry(actionTargetId,
                                 new CombatEvent.DamageTaken {
-                                    // 1203 = Addle
-                                    // 1195 = Feint
-                                    // 1193 = Reprisal
-                                    //  860 = Dismantled
-                                    // 1715 = Malodorous, BLU Bad Breath
-                                    // 2115 = Conked, BLU Magic Hammer
-                                    // 3642 = Candy Cane, BLU Candy Cane
                                     Snapshot = p.Snapshot(true, additionalStatus),
                                     Source = source,
+                                    SourceIsPlayer = sourceIsPlayer,
                                     Amount = amount,
                                     Action = action?.ActionCategory.RowId == 1 ? "Auto-attack" : action?.Name.ExtractText() ?? "",
                                     Icon = action?.Icon,
@@ -142,7 +175,7 @@ public class CombatEventCapture : IDisposable {
 
     private void ProcessPacketActorControlDetour(
         uint entityId, ActorControlCategory type, uint param1, uint param2, uint param3, uint param4, uint param5, uint param6, ulong param7, byte isReplay) {
-        processPacketActorControlHook.Original(entityId, type, param1, param2, param3, param4, param5, param6, param7, isReplay);
+        processPacketActorControlHook!.Original(entityId, type, param1, param2, param3, param4, param5, param6, param7, isReplay);
 
         try {
             if (!plugin.ConditionEvaluator.ShouldCapture(entityId))
@@ -172,8 +205,13 @@ public class CombatEventCapture : IDisposable {
 
                     break;
                 case ActorControlCategory.Death: {
-                    if (combatEvents.Remove(entityId, out var events)) {
-                        var death = new Death { PlayerId = entityId, PlayerName = p.Name.TextValue, TimeOfDeath = DateTime.Now, Events = events };
+                    combatEvents.Remove(entityId, out var events);
+                    var timeOfDeath = DateTime.Now;
+                    if (Service.ObjectTable.LocalPlayer?.EntityId == entityId)
+                        LogSelfDeath(p.MaxHp, timeOfDeath, events);
+
+                    if (events != null) {
+                        var death = new Death { PlayerId = entityId, PlayerName = p.Name.TextValue, TimeOfDeath = timeOfDeath, Events = events };
                         plugin.DeathsPerPlayer.AddEntry(entityId, death);
                         plugin.NotificationHandler.DisplayDeath(death);
                     }
@@ -187,9 +225,13 @@ public class CombatEventCapture : IDisposable {
     }
 
     private unsafe void ProcessPacketEffectResultDetour(uint targetId, IntPtr actionIntegrityData, byte isReplay) {
-        processPacketEffectResultHook.Original(targetId, actionIntegrityData, isReplay);
+        processPacketEffectResultHook!.Original(targetId, actionIntegrityData, isReplay);
 
         try {
+            // actionIntegrityData is a raw game-supplied pointer; a zero here would AVE-crash on deref below
+            // (uncatchable in .NET, so the surrounding try/catch cannot help).
+            if (actionIntegrityData == IntPtr.Zero)
+                return;
             var message = (AddStatusEffect*)actionIntegrityData;
             if (!plugin.ConditionEvaluator.ShouldCapture(targetId))
                 return;
@@ -226,6 +268,39 @@ public class CombatEventCapture : IDisposable {
         } catch (Exception e) {
             Service.PluginLog.Error(e, "Caught unexpected exception");
         }
+    }
+
+    // 封包掛鉤與 Framework.Update 都在框架執行緒，這兩個欄位不必加鎖。
+    private bool selfDeathLogged;
+    private DateTime selfDeathLoggedAt;
+
+    private void LogSelfDeath(uint maxHp, DateTime timeOfDeath, List<CombatEvent>? events) {
+        // 同一次死亡只寫一行：寫過之後要等 TickSelfAlive 看到活著才再寫。
+        if (selfDeathLogged)
+            return;
+        selfDeathLogged = true;
+        selfDeathLoggedAt = timeOfDeath;
+
+        try {
+            var territoryId = Service.ClientState.TerritoryType;
+            var territoryName = Service.DataManager.GetExcelSheet<TerritoryType>().GetRowOrDefault(territoryId)?.PlaceName.ValueNullable?.Name.ExtractText();
+            var statusSheet = Service.DataManager.GetExcelSheet<Status>();
+            var line = SelfDeathLog.Format(territoryId, territoryName, maxHp, timeOfDeath, events,
+                id => statusSheet.GetRowOrDefault(id) is { } s
+                    ? new SelfDeathLog.StatusInfo(s.Name.ExtractText(), (StatusCategory)s.StatusCategory, s.IsFcBuff)
+                    : null);
+            // 整行當訊息範本送出，名稱裡的大括號要跳脫，否則 Serilog 會當成佔位符吃掉。
+            Service.PluginLog.Information(line.Replace("{", "{{").Replace("}", "}}"));
+        } catch (Exception e) {
+            Service.PluginLog.Error(e, "[DeathRecap][死亡] 組不出死亡紀錄");
+        }
+    }
+
+    public void TickSelfAlive() {
+        if (!selfDeathLogged)
+            return;
+        if (Service.ObjectTable.LocalPlayer is { } self && SelfDeathLog.SeenAliveAfterDeath(selfDeathLoggedAt, DateTime.Now, self.CurrentHp))
+            selfDeathLogged = false;
     }
 
     public void CleanCombatEvents() {
@@ -272,8 +347,8 @@ public class CombatEventCapture : IDisposable {
     }
 
     public void Dispose() {
-        processPacketActionEffectHook.Dispose();
-        processPacketEffectResultHook.Dispose();
-        processPacketActorControlHook.Dispose();
+        processPacketActionEffectHook?.Dispose();
+        processPacketEffectResultHook?.Dispose();
+        processPacketActorControlHook?.Dispose();
     }
 }

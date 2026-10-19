@@ -61,6 +61,7 @@ public class DeathRecapPlugin : IDalamudPlugin {
     }
 
     private void FrameworkOnUpdate(IFramework framework) {
+        CombatEventCapture.TickSelfAlive();
 #if !DEBUG
         var now = DateTime.Now;
         if ((now - lastClean).TotalSeconds >= 10) {

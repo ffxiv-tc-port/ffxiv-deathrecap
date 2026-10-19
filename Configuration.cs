@@ -29,6 +29,18 @@ public class Configuration : IPluginConfiguration {
     public XivChatType ChatType { get; set; } = XivChatType.SystemMessage;
     public EventFilter EventFilter { get; set; } = EventFilter.Default;
     public bool ShowCombatHistogram { get; set; } = false;
+
+    /// <summary>
+    /// 自動顯示（死亡時自動開啟死亡回顧）的視窗，是否在倒數結束後自動關閉。
+    /// 只影響自動顯示的情況；手動用 /dr、點聊天連結或點彈出視窗開啟的不受影響。
+    /// </summary>
+    public bool AutoCloseAutoShownWindow { get; set; } = true;
+
+    /// <summary>
+    /// 自動顯示的視窗在幾秒後自動關閉。0 代表不自動關閉。
+    /// </summary>
+    public int AutoCloseSeconds { get; set; } = 10;
+
     public int Version { get; set; } = 2;
 
     [JsonExtensionData]

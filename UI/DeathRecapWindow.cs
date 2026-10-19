@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Components;
@@ -27,10 +29,35 @@ public class DeathRecapWindow : Window {
     private const uint ColorAction = 0xFFf0a8b8;
     private const uint ColorGrey = 0xFF808080;
     private const uint ColorDarkGrey = 0xFF303030;
+    private const uint ColorAutoClose = 0xFF4AC0FF;
 
     private readonly DeathRecapPlugin plugin;
 
     private bool hasShownTip;
+
+    /// <summary>
+    /// 自動關閉的截止時刻（<see cref="Environment.TickCount64"/>）。0 代表沒有在倒數。
+    /// </summary>
+    private long autoCloseAt;
+
+    // 每筆事件畫出來的文字與狀態欄只由事件本身決定（事件與快照建立後不再修改）：算一次留著，之後每幀重用。
+    // 鍵是事件物件本身（弱參照，比的是同一個物件不是內容），死亡記錄被清掉時跟著消失。
+    private readonly ConditionalWeakTable<CombatEvent, RowCache> rowCaches = new();
+
+    // 數字格式跟著目前文化走：文化物件一換就整份重算。
+    private CultureInfo? rowCacheCulture;
+
+    private sealed class RowCache {
+        public string? Time;
+        public DateTime TimeDeath;
+        public string? Amount;
+        public uint AmountTotal;
+        public string? Hp;
+        public StatusCell[]? Statuses;
+    }
+
+    // 狀態欄的一格。Separator＝兩組狀態之間的「|」，其餘欄位不用；否則是一個狀態圖示。
+    private readonly record struct StatusCell(bool Separator, uint Icon, uint Stack, Status Status);
 
     public DeathRecapWindow(DeathRecapPlugin plugin) : base("死亡回顧") {
         this.plugin = plugin;
@@ -43,8 +70,71 @@ public class DeathRecapWindow : Window {
 
     public int SelectedDeath { get; internal set; }
 
+    /// <summary>
+    /// 開始（或重設）自動關閉倒數。只有「死亡時自動開啟死亡回顧」這條路徑該呼叫。
+    /// 重複呼叫是重設成完整秒數，不會累加。
+    /// </summary>
+    public void BeginAutoCloseCountdown() {
+        var seconds = plugin.Configuration.AutoCloseSeconds;
+        autoCloseAt = plugin.Configuration.AutoCloseAutoShownWindow && seconds > 0 ? Environment.TickCount64 + seconds * 1000L : 0;
+    }
+
+    /// <summary>
+    /// 取消自動關閉倒數。使用者主動開啟或操作視窗時呼叫。
+    /// </summary>
+    public void CancelAutoCloseCountdown() => autoCloseAt = 0;
+
+    /// <summary>
+    /// 判斷使用者這一幀是不是真的在「操作」這個視窗（含子視窗）。單純把滑鼠掠過去不算。
+    /// </summary>
+    private static bool IsUserInteracting() {
+        const ImGuiHoveredFlags flags = ImGuiHoveredFlags.RootAndChildWindows | ImGuiHoveredFlags.AllowWhenBlockedByActiveItem |
+                                        ImGuiHoveredFlags.AllowWhenBlockedByPopup;
+        if (!ImGui.IsWindowHovered(flags))
+            return false;
+
+        if (ImGui.IsMouseClicked(ImGuiMouseButton.Left) || ImGui.IsMouseClicked(ImGuiMouseButton.Right) ||
+            ImGui.IsMouseClicked(ImGuiMouseButton.Middle))
+            return true;
+
+        var io = ImGui.GetIO();
+        return io.MouseWheel != 0 || io.MouseWheelH != 0;
+    }
+
+    /// <summary>
+    /// 每幀在 Draw 內推進倒數：被操作就取消，時間到就關窗。不另開 timer。
+    /// </summary>
+    private void UpdateAutoClose() {
+        if (autoCloseAt == 0)
+            return;
+
+        if (IsUserInteracting()) {
+            autoCloseAt = 0;
+            return;
+        }
+
+        if (Environment.TickCount64 >= autoCloseAt) {
+            autoCloseAt = 0;
+            IsOpen = false;
+        }
+    }
+
+    /// <summary>
+    /// 倒數中要顯示在標題列右側的字樣，沒在倒數時回傳 null。
+    /// </summary>
+    private string? GetAutoCloseLabel() {
+        if (autoCloseAt == 0)
+            return null;
+
+        var remainingMs = autoCloseAt - Environment.TickCount64;
+        var remaining = (int)Math.Ceiling(Math.Max(remainingMs, 0) / 1000d);
+        return $"{remaining} 秒後自動關閉";
+    }
+
     public override void Draw() {
         try {
+            UpdateAutoClose();
+
             if (!plugin.DeathsPerPlayer.TryGetValue(SelectedPlayer, out var deaths))
                 deaths = new List<Death>();
 
@@ -136,7 +226,23 @@ public class DeathRecapWindow : Window {
 
             ImGui.PushFont(UiBuilder.IconFont);
             var config = FontAwesomeIcon.Cog.ToIconString();
-            ImGui.SameLine(ImGui.GetWindowContentRegionMax().X - ImGui.GetWindowContentRegionMin().X - ImGuiHelpers.GetButtonSize(config).X);
+            var configX = ImGui.GetWindowContentRegionMax().X - ImGui.GetWindowContentRegionMin().X - ImGuiHelpers.GetButtonSize(config).X;
+            ImGui.PopFont();
+
+            if (GetAutoCloseLabel() is { } autoCloseLabel) {
+                var labelWidth = ImGui.CalcTextSize(autoCloseLabel).X;
+                ImGui.SameLine(Math.Max(0f, configX - labelWidth - 15 * ImGuiHelpers.GlobalScale));
+                ImGui.AlignTextToFramePadding();
+                ImGui.PushStyleColor(ImGuiCol.Text, ColorAutoClose);
+                ImGui.TextUnformatted(autoCloseLabel);
+                ImGui.PopStyleColor();
+                if (ImGui.IsItemHovered()) {
+                    ImGui.SetTooltip("這個視窗是死亡時自動顯示的，倒數結束後會自動關閉。\n在視窗上點一下滑鼠即可取消自動關閉。");
+                }
+            }
+
+            ImGui.PushFont(UiBuilder.IconFont);
+            ImGui.SameLine(configX);
             if (ImGui.Button(config))
                 plugin.ConfigWindow.IsOpen = true;
 
@@ -146,6 +252,9 @@ public class DeathRecapWindow : Window {
             }
 
             ImGui.Separator();
+
+            if (plugin.CombatEventCapture.MissingNotice is { } missingNotice)
+                ImGui.TextColored(new Vector4(1f, 0.75f, 0.3f, 1f), missingNotice);
 
             ImGui.Columns(2);
             ImGui.SetColumnWidth(0, 160 * ImGuiHelpers.GlobalScale);
@@ -170,6 +279,8 @@ public class DeathRecapWindow : Window {
     }
 
     public override void OnClose() {
+        autoCloseAt = 0;
+
         if (plugin.Configuration.ShowTip && !hasShownTip) {
             Service.ChatGui.Print("[DeathRecap] 提示：可使用 /dr 或 /deathrecap 重新開啟此視窗。");
             hasShownTip = true;
@@ -180,15 +291,18 @@ public class DeathRecapWindow : Window {
         void DrawItem(IEnumerable<Death> pdeaths, ulong id) {
             if (pdeaths.FirstOrDefault()?.PlayerName is not { } name)
                 return;
+            // 清單在下拉視窗的根層：以玩家 ID 區分，空名字或同名玩家都不會撞到同一個 ImGui ID。
+            ImGui.PushID((nuint)id);
             if (ImGui.Selectable(name, id == SelectedPlayer))
                 SelectedPlayer = id;
+            ImGui.PopID();
         }
 
         ImGui.AlignTextToFramePadding();
         ImGui.TextUnformatted("玩家");
         ImGui.SameLine();
         ImGui.SetNextItemWidth(200 * ImGuiHelpers.GlobalScale);
-        if (ImGui.BeginCombo("", selectedPlayerName)) {
+        if (ImGui.BeginCombo("##deathRecapPlayer", selectedPlayerName)) {
             var processed = new HashSet<ulong>();
 
             if (Service.PartyList.Length > 0) {
@@ -215,6 +329,12 @@ public class DeathRecapWindow : Window {
     }
 
     private void DrawCombatEventTable(Death? death) {
+        var culture = CultureInfo.CurrentCulture;
+        if (!ReferenceEquals(culture, rowCacheCulture)) {
+            rowCaches.Clear();
+            rowCacheCulture = culture;
+        }
+
         if (ImGui.BeginTable("deathrecap", 6,
                 ImGuiTableFlags.Borders | ImGuiTableFlags.NoBordersInBody | ImGuiTableFlags.ScrollY | ImGuiTableFlags.Resizable | ImGuiTableFlags.Reorderable |
                 ImGuiTableFlags.Hideable)) {
@@ -234,7 +354,7 @@ public class DeathRecapWindow : Window {
                                 continue;
                             ImGui.TableNextRow();
 
-                            DrawTimeColumn(hot, death.TimeOfDeath);
+                            DrawTimeColumn(hot, death.TimeOfDeath, rowCaches.GetOrCreateValue(hot));
 
                             var total = hot.Amount;
                             while (i > 0 && death.Events[i - 1] is CombatEvent.HoT h) {
@@ -243,9 +363,16 @@ public class DeathRecapWindow : Window {
                                 i--;
                             }
 
+                            // 合併後的那一列記在最後併進來的那筆上；合計對不上就重算。
+                            var hotRow = rowCaches.GetOrCreateValue(hot);
+                            if (hotRow.Amount == null || hotRow.AmountTotal != total) {
+                                hotRow.Amount = $"+{total:N0}";
+                                hotRow.AmountTotal = total;
+                            }
+
                             ImGui.TableNextColumn(); // Amount
                             ImGui.AlignTextToFramePadding();
-                            ImGuiHelper.TextColored(ColorHealingText, $"+{total:N0}");
+                            ImGuiHelper.TextColored(ColorHealingText, hotRow.Amount);
 
                             ImGui.TableNextColumn(); // Ability
                             ImGui.AlignTextToFramePadding();
@@ -253,18 +380,19 @@ public class DeathRecapWindow : Window {
 
                             ImGui.TableNextColumn(); // Source
 
-                            DrawHpColumn(hot, total);
+                            DrawHpColumn(hot, hotRow, total);
                             break;
                         case CombatEvent.DoT dot:
                             if (!plugin.Configuration.EventFilter.HasFlag(EventFilter.Damage))
                                 continue;
                             ImGui.TableNextRow();
 
-                            DrawTimeColumn(dot, death.TimeOfDeath);
+                            var dotRow = rowCaches.GetOrCreateValue(dot);
+                            DrawTimeColumn(dot, death.TimeOfDeath, dotRow);
 
                             ImGui.TableNextColumn(); // Amount
                             ImGui.AlignTextToFramePadding();
-                            ImGuiHelper.TextColored(ColorDamage, $"-{dot.Amount:N0}");
+                            ImGuiHelper.TextColored(ColorDamage, dotRow.Amount ??= $"-{dot.Amount:N0}");
 
                             ImGui.TableNextColumn(); // Ability
                             ImGui.AlignTextToFramePadding();
@@ -272,18 +400,19 @@ public class DeathRecapWindow : Window {
 
                             ImGui.TableNextColumn(); // Source
 
-                            DrawHpColumn(dot);
+                            DrawHpColumn(dot, dotRow);
                             break;
                         case CombatEvent.DamageTaken dt: {
                             if (!plugin.Configuration.EventFilter.HasFlag(EventFilter.Damage))
                                 continue;
                             ImGui.TableNextRow();
 
-                            DrawTimeColumn(dt, death.TimeOfDeath);
+                            var dtRow = rowCaches.GetOrCreateValue(dt);
+                            DrawTimeColumn(dt, death.TimeOfDeath, dtRow);
 
                             ImGui.TableNextColumn(); // Amount
                             ImGui.AlignTextToFramePadding();
-                            var text = $"-{dt.Amount:N0}{(dt.Crit ? dt.DirectHit ? "!!" : "!" : "")}";
+                            var text = dtRow.Amount ??= $"-{dt.Amount:N0}{(dt.Crit ? dt.DirectHit ? "!!" : "!" : "")}";
                             ImGuiHelper.TextColored(dt.DamageType == DamageType.Magic ? ColorMagicDamage : ColorPhysicalDamage, text);
 
                             if (ImGui.IsItemHovered()) {
@@ -313,9 +442,9 @@ public class DeathRecapWindow : Window {
                             ImGui.AlignTextToFramePadding();
                             ImGui.TextUnformatted(dt.Source ?? "");
 
-                            DrawHpColumn(dt);
+                            DrawHpColumn(dt, dtRow);
 
-                            DrawStatusEffectsColumn(dt);
+                            DrawStatusEffectsColumn(dt, dtRow);
                             break;
                         }
                         case CombatEvent.Healed h: {
@@ -323,11 +452,12 @@ public class DeathRecapWindow : Window {
                                 continue;
                             ImGui.TableNextRow();
 
-                            DrawTimeColumn(h, death.TimeOfDeath);
+                            var hRow = rowCaches.GetOrCreateValue(h);
+                            DrawTimeColumn(h, death.TimeOfDeath, hRow);
 
                             ImGui.TableNextColumn(); // Amount
                             ImGui.AlignTextToFramePadding();
-                            ImGuiHelper.TextColored(ColorHealingText, $"+{h.Amount:N0}{(h.Crit ? "!" : "")}");
+                            ImGuiHelper.TextColored(ColorHealingText, hRow.Amount ??= $"+{h.Amount:N0}{(h.Crit ? "!" : "")}");
 
                             ImGui.TableNextColumn(); // Ability
                             if (GetIconImage(h.Icon) is { } img)
@@ -340,9 +470,9 @@ public class DeathRecapWindow : Window {
                             ImGui.AlignTextToFramePadding();
                             ImGui.TextUnformatted(h.Source ?? "");
 
-                            DrawHpColumn(h);
+                            DrawHpColumn(h, hRow);
 
-                            DrawStatusEffectsColumn(h);
+                            DrawStatusEffectsColumn(h, hRow);
                             break;
                         }
                         case CombatEvent.StatusEffect s: {
@@ -354,11 +484,12 @@ public class DeathRecapWindow : Window {
 
                             ImGui.TableNextRow();
 
-                            DrawTimeColumn(s, death.TimeOfDeath);
+                            var sRow = rowCaches.GetOrCreateValue(s);
+                            DrawTimeColumn(s, death.TimeOfDeath, sRow);
 
                             ImGui.TableNextColumn(); // Amount
                             ImGui.AlignTextToFramePadding();
-                            ImGui.TextUnformatted($"{s.Duration:N0}s");
+                            ImGui.TextUnformatted(sRow.Amount ??= $"{s.Duration:N0}s");
 
                             ImGui.TableNextColumn(); // Ability
                             if (GetIconImage(s.Icon, s.StackCount) is { } img)
@@ -376,9 +507,9 @@ public class DeathRecapWindow : Window {
                             ImGui.AlignTextToFramePadding();
                             ImGui.TextUnformatted(s.Source ?? "");
 
-                            DrawHpColumn(s);
+                            DrawHpColumn(s, sRow);
 
-                            DrawStatusEffectsColumn(s);
+                            DrawStatusEffectsColumn(s, sRow);
                             break;
                         }
                     }
@@ -643,42 +774,58 @@ public class DeathRecapWindow : Window {
         ImGui.SameLine(0, paddingRight);
     }
 
-    private void DrawStatusEffectsColumn(CombatEvent e) {
+    private void DrawStatusEffectsColumn(CombatEvent e, RowCache row) {
         if (e.Snapshot.StatusEffects is { } statusEffects) {
             ImGui.TableNextColumn();
-            var printSeparator = false;
-            var sheet = Service.DataManager.GetExcelSheet<Status>();
-            foreach (var group in statusEffects.Select(s => (Status: sheet.GetRow(s.Id), s.StackCount))
-                         .Reverse()
-                         .GroupBy(s => s.Status.StatusCategory)
-                         .OrderByDescending(s => s.Key)) {
-                if (group.Key == 0)
-                    continue;
-                if (printSeparator) {
+            foreach (var cell in row.Statuses ??= BuildStatusCells(statusEffects)) {
+                if (cell.Separator) {
                     ImGui.AlignTextToFramePadding();
                     ImGuiHelper.TextColored(ColorGrey, "|");
                     ImGui.SameLine(0, 4);
-                } else
-                    printSeparator = true;
+                    continue;
+                }
 
-                foreach (var s in group) {
-                    if (s.Status.IsFcBuff)
-                        continue;
-                    if (GetIconImage(s.Status.Icon, s.StackCount <= s.Status.MaxStacks ? s.StackCount : 0) is { } img) {
-                        InlineIcon(img);
-                        if (ImGui.IsItemHovered()) {
-                            ImGui.BeginTooltip();
-                            ImGui.TextUnformatted(s.Status.Name.ExtractText());
-                            ImGui.TextUnformatted(s.Status.Description.ExtractText());
-                            ImGui.EndTooltip();
-                        }
+                // 貼圖每幀重新向 Dalamud 要（會晚載入、會被卸載），留著的只有圖示編號。
+                if (GetIconImage(cell.Icon, cell.Stack) is { } img) {
+                    InlineIcon(img);
+                    if (ImGui.IsItemHovered()) {
+                        ImGui.BeginTooltip();
+                        ImGui.TextUnformatted(cell.Status.Name.ExtractText());
+                        ImGui.TextUnformatted(cell.Status.Description.ExtractText());
+                        ImGui.EndTooltip();
                     }
                 }
             }
         }
     }
 
-    private void DrawHpColumn(CombatEvent e, uint hot = 0) {
+    // 狀態欄由左到右要畫的東西：分類大的在前、同一類裡後上的在前、無分類的整組不畫、部隊增益不畫。
+    private static StatusCell[] BuildStatusCells(List<CombatEvent.StatusEffectSnapshot> statusEffects) {
+        var cells = new List<StatusCell>(statusEffects.Count + 2);
+        var printSeparator = false;
+        var sheet = Service.DataManager.GetExcelSheet<Status>();
+        foreach (var group in statusEffects.Select(s => (Status: sheet.GetRow(s.Id), s.StackCount))
+                     .Reverse()
+                     .GroupBy(s => s.Status.StatusCategory)
+                     .OrderByDescending(s => s.Key)) {
+            if (group.Key == 0)
+                continue;
+            if (printSeparator)
+                cells.Add(new StatusCell(true, 0, 0, default));
+            else
+                printSeparator = true;
+
+            foreach (var s in group) {
+                if (s.Status.IsFcBuff)
+                    continue;
+                cells.Add(new StatusCell(false, s.Status.Icon, s.StackCount <= s.Status.MaxStacks ? s.StackCount : 0, s.Status));
+            }
+        }
+
+        return cells.ToArray();
+    }
+
+    private void DrawHpColumn(CombatEvent e, RowCache row, uint hot = 0) {
         ImGui.TableNextColumn();
         ImGui.PushStyleColor(ImGuiCol.PlotHistogram, ColorHp);
         var hpFract = (float)e.Snapshot.CurrentHp / e.Snapshot.MaxHp;
@@ -700,7 +847,7 @@ public class DeathRecapWindow : Window {
         if (change > 0)
             hpFract += change;
 
-        var text = $"{e.Snapshot.CurrentHp:N0}";
+        var text = row.Hp ??= $"{e.Snapshot.CurrentHp:N0}";
         ImGui.ProgressBar(hpFract, new Vector2(-1, 0), text);
         ImGui.PopStyleColor();
 
@@ -733,10 +880,15 @@ public class DeathRecapWindow : Window {
         }
     }
 
-    private void DrawTimeColumn(CombatEvent e, DateTime deathTime) {
+    private void DrawTimeColumn(CombatEvent e, DateTime deathTime, RowCache row) {
         ImGui.TableNextColumn();
         ImGui.AlignTextToFramePadding();
-        ImGuiHelper.TextColored(ColorGrey, $"{(e.Snapshot.Time - deathTime).TotalSeconds:N1}s");
+        if (row.Time == null || row.TimeDeath != deathTime) {
+            row.Time = $"{(e.Snapshot.Time - deathTime).TotalSeconds:N1}s";
+            row.TimeDeath = deathTime;
+        }
+
+        ImGuiHelper.TextColored(ColorGrey, row.Time);
     }
 
     private static IDalamudTextureWrap? GetIconImage(uint? icon, uint stackCount = 0) {
@@ -744,8 +896,9 @@ public class DeathRecapWindow : Window {
             return null;
         if (stackCount > 1)
             idx += stackCount - 1;
-        return Service.TextureProvider.TryGetIconPath(idx, out var path)
-            ? Service.TextureProvider.GetFromGame(path).GetWrapOrDefault()
+        // 與「TryGetIconPath 再 GetFromGame」拿到同一個共用貼圖；路徑由 Dalamud 記著，不必每次重組再查檔案在不在。
+        return Service.TextureProvider.TryGetFromGameIcon(idx, out var texture)
+            ? texture.GetWrapOrDefault()
             : null;
     }
 }
