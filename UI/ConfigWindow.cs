@@ -31,10 +31,14 @@ public class ConfigWindow : Window {
         foreach (var (k, v) in conf.EnumCaptureConfigs()) {
             ImGui.PushID(k);
             var bCapture = v.Capture;
-            if (ImGui.Checkbox($"記錄{k}", ref bCapture)) {
+            var who = k switch { "Self" => "自己", "Party" => "小隊成員", "Others" => "其他人", _ => k };
+            if (ImGui.Checkbox($"記錄{who}", ref bCapture)) {
                 v.Capture = bCapture;
                 conf.Save();
             }
+
+            if (k == "Self")
+                SelfCaptureTooltip();
 
             var notificationStyle = (int)v.NotificationStyle;
             ImGui.TextUnformatted("死亡時");
@@ -159,6 +163,14 @@ public class ConfigWindow : Window {
     private static void AutoCloseSecondsTooltip() {
         if (ImGui.IsItemHovered()) {
             ImGui.SetTooltip("自動顯示的視窗要在幾秒後自動關閉。\n設為 0 等同停用自動關閉。");
+        }
+    }
+
+    private static void SelfCaptureTooltip() {
+        if (ImGui.IsItemHovered()) {
+            ImGui.SetTooltip("記錄自己受到的傷害、治療與狀態，死亡時才有死亡回顧可看。\n" +
+                             "自己死亡時寫進 dalamud.log 的死因摘要也跟著記錄設定：\n" +
+                             "關掉這個、而且「記錄其他人」沒開、也沒有在小隊中被「記錄小隊成員」涵蓋時，那一行不寫。");
         }
     }
 
